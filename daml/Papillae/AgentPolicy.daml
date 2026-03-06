@@ -1,0 +1,61 @@
+-- | AgentPolicy.daml
+-- Reusable payment policy template for enterprise agent deployments.
+-- An enterprise creates a policy once, then creates AgentSessions that
+-- reference the policy.
+
+module Papillae.AgentPolicy where
+
+import Papillae.Types
+
+template AgentPolicy
+  with
+    policyOwner   : Party
+    orchestrator  : Party
+    policyId      : Text
+    policyName    : Text
+    description   : Text
+    limits        : SpendingLimits
+    complianceTier: Text
+    allowedAgents : [Party]
+    isActive      : Bool
+    version       : Int
+    createdAt     : Time
+    updatedAt     : Time
+
+  where
+    signatory policyOwner
+    observer orchestrator
+
+    ensure policyId /= "" && policyName /= ""
+
+    choice UpdatePolicy : ContractId AgentPolicy
+      with
+        newLimits     : SpendingLimits
+        newDescription: Text
+      controller policyOwner
+      do
+        create this with
+          limits      = newLimits
+          description = newDescription
+          version     = version + 1
+          updatedAt   = createdAt
+
+    choice AuthorizeAgent : ContractId AgentPolicy
+      with agentParty : Party
+      controller policyOwner
+      do
+        assertMsg "Agent already authorized"
+          (agentParty `notElem` allowedAgents)
+        create this with
+          allowedAgents = agentParty :: allowedAgents
+
+    choice RevokeAgentFromPolicy : ContractId AgentPolicy
+      with agentParty : Party
+      controller policyOwner
+      do
+        create this with
+          allowedAgents = filter (/= agentParty) allowedAgents
+
+    choice DeactivatePolicy : ContractId AgentPolicy
+      controller policyOwner
+      do create this with isActive = False

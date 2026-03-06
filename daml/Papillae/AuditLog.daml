@@ -1,0 +1,23 @@
+-- | AuditLog.daml
+-- General-purpose immutable audit trail. Logs all significant system events.
+
+module Papillae.AuditLog where
+
+template AuditLog
+  with
+    orchestrator : Party
+    logId        : Text
+    eventType    : Text       -- "PAYMENT_CREATED", "COMPLIANCE_CHECK", "ROUTE_SELECTED", etc.
+    entityId     : Text       -- payment ID, session ID, etc.
+    entityType   : Text       -- "PaymentIntent", "AgentSession", etc.
+    actor        : Party
+    action       : Text
+    details      : Text       -- JSON string with event details
+    timestamp    : Time
+
+  where
+    signatory orchestrator
+    observer actor
+
+    ensure logId /= "" && eventType /= ""
+    -- Immutable: no choices

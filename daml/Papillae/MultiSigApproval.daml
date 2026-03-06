@@ -1,0 +1,81 @@
+-- | MultiSigApproval.daml
+-- Multi-signature approval for high-value or DAO payments.
+-- N-of-M signatories required before payment can proceed.
+
+module Papillae.MultiSigApproval where
+
+import Papillae.Types
+import DA.List (nub)
+
+data ApprovalStatus = ApprovalStatus
+  with
+    approver    : Party
+    approved    : Bool
+    respondedAt : Optional Time
+    comment     : Optional Text
+  deriving (Eq, Show)
+
+template MultiSigApproval
+  with
+    orchestrator    : Party
+    initiator       : Party
+    approvers       : [Party]
+    requiredCount   : Int
+    approvalStatuses: [ApprovalStatus]
+    approvalId      : Text
+    paymentId       : Text
+    amount          : Decimal
+    destCurrency    : FiatCurrency
+    recipientRef    : Text
+    intentText      : Text
+    requestedAt     : Time
+    expiresAt       : Time
+    isResolved      : Bool
+    finalDecision   : Optional Text
+
+  where
+    signatory initiator
+    observer orchestrator, approvers
+
+    ensure
+      approvalId /= "" &&
+      requiredCount > 0 &&
+      requiredCount <= length approvers &&
+      length (nub approvers) == length approvers
+
+    choice CastVote : ContractId MultiSigApproval
+      with
+        approver : Party
+        approved : Bool
+        comment  : Optional Text
+        votedAt  : Time
+      controller approver
+      do
+        assertMsg "Not an authorized approver" (approver `elem` approvers)
+        assertMsg "Approval window has expired" (votedAt < expiresAt)
+        assertMsg "Already resolved" (not isResolved)
+        let updatedStatuses = map (\s ->
+              if s.approver == approver
+                then s with approved = approved, respondedAt = Some votedAt, comment = comment
+                else s
+              ) approvalStatuses
+        let approvedCount = length (filter (\s -> s.approved) updatedStatuses)
+        let rejectedCount = length (filter (\s -> s.approved == False && s.respondedAt /= None) updatedStatuses)
+        let resolved = approvedCount >= requiredCount || rejectedCount > (length approvers - requiredCount)
+        let decision = if resolved
+              then Some (if approvedCount >= requiredCount then "APPROVED" else "REJECTED")
+              else None
+        create this with
+          approvalStatuses = updatedStatuses
+          isResolved       = resolved
+          finalDecision    = decision
+
+    choice ExpireApproval : ContractId MultiSigApproval
+      with currentTime : Time
+      controller orchestrator
+      do
+        assertMsg "Not yet expired" (currentTime >= expiresAt)
+        assertMsg "Already resolved" (not isResolved)
+        create this with
+          isResolved    = True
+          finalDecision = Some "EXPIRED"

@@ -1,0 +1,70 @@
+-- | DisputeResolution.daml
+-- Handles payment disputes between senders and the orchestrator.
+
+module Papillae.DisputeResolution where
+
+import Papillae.Types
+
+template DisputeResolution
+  with
+    orchestrator   : Party
+    sender         : Party
+    disputeId      : Text
+    paymentId      : Text
+    reason         : Text
+    description    : Text
+    status         : DisputeStatus
+    evidence       : [Text]      -- list of evidence hashes/refs
+    resolution     : Optional Text
+    refundAmount   : Optional Decimal
+    createdAt      : Time
+    resolvedAt     : Optional Time
+
+  where
+    signatory sender
+    observer orchestrator
+
+    ensure disputeId /= "" && paymentId /= ""
+
+    -- Orchestrator begins review
+    choice StartReview : ContractId DisputeResolution
+      with reviewStartedAt : Time
+      controller orchestrator
+      do
+        assertMsg "Dispute must be open" (status == DisputeOpen)
+        create this with status = DisputeUnderReview
+
+    -- Sender adds evidence
+    choice AddEvidence : ContractId DisputeResolution
+      with evidenceRef : Text
+      controller sender
+      do
+        assertMsg "Can only add evidence while open or under review"
+          (status == DisputeOpen || status == DisputeUnderReview)
+        create this with evidence = evidence ++ [evidenceRef]
+
+    -- Orchestrator resolves in sender's favor (with refund)
+    choice ResolveInFavor : ContractId DisputeResolution
+      with
+        resolutionText : Text
+        refund         : Decimal
+        resolvedTime   : Time
+      controller orchestrator
+      do
+        create this with
+          status       = DisputeResolved
+          resolution   = Some resolutionText
+          refundAmount = Some refund
+          resolvedAt   = Some resolvedTime
+
+    -- Orchestrator rejects the dispute
+    choice RejectDispute : ContractId DisputeResolution
+      with
+        rejectionReason : Text
+        rejectedAt      : Time
+      controller orchestrator
+      do
+        create this with
+          status     = DisputeRejected
+          resolution = Some rejectionReason
+          resolvedAt = Some rejectedAt

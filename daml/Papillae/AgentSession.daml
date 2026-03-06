@@ -1,0 +1,95 @@
+-- | AgentSession.daml
+-- Governs AI agent delegation. An account owner creates a session granting
+-- an agent party permission to initiate payments within defined limits.
+-- The session tracks spend and enforces all constraints on-chain.
+
+module Papillae.AgentSession where
+
+import Papillae.Types
+import DA.Optional (fromSome)
+
+template AgentSession
+  with
+    orchestrator  : Party
+    delegator     : Party      -- the account owner
+    agentParty    : Party      -- the AI agent
+    sessionId     : Text
+    agentName     : Text
+    agentType     : Text       -- "personal" | "enterprise" | "dao" | "platform" | "test"
+    limits        : SpendingLimits
+    tracker       : SpendTracker
+    policyRef     : Optional Text  -- reference to AgentPolicy contract
+    isActive      : Bool
+    createdAt     : Time
+    expiresAt     : Time
+
+  where
+    signatory delegator
+    observer orchestrator, agentParty
+
+    ensure sessionId /= "" && agentName /= ""
+
+    -- Agent requests a payment (orchestrator validates and records spend)
+    choice RequestPayment : ContractId AgentSession
+      with
+        amount      : Decimal
+        corridor    : Text
+        requestedAt : Time
+      controller agentParty
+      do
+        -- Session must be active
+        assertMsg "Session is not active" isActive
+        -- Session must not be expired
+        assertMsg "Session has expired" (requestedAt < expiresAt)
+        -- Amount within single transfer limit
+        assertMsg "Exceeds single transfer limit"
+          (amount <= limits.maxSingleTransfer)
+        -- Corridor must be allowed
+        assertMsg "Corridor not permitted"
+          (corridor `elem` limits.allowedCorridors)
+        -- Daily volume check
+        assertMsg "Exceeds daily volume limit"
+          (tracker.dailySpent + amount <= limits.maxDailyVolume)
+        -- Monthly volume check
+        assertMsg "Exceeds monthly volume limit"
+          (tracker.monthlySpent + amount <= limits.maxMonthlyVolume)
+        -- Total volume check
+        assertMsg "Exceeds total volume limit"
+          (tracker.totalSpent + amount <= limits.maxTotalVolume)
+
+        create this with
+          tracker = tracker with
+            dailySpent   = tracker.dailySpent + amount
+            monthlySpent = tracker.monthlySpent + amount
+            totalSpent   = tracker.totalSpent + amount
+
+    -- Delegator revokes the session
+    choice RevokeSession : ContractId AgentSession
+      controller delegator
+      do create this with isActive = False
+
+    -- Orchestrator resets daily spend counter (called at midnight UTC)
+    choice ResetDailySpend : ContractId AgentSession
+      with resetDate : Date
+      controller orchestrator
+      do
+        create this with
+          tracker = tracker with
+            dailySpent   = 0.0
+            lastResetDay = resetDate
+
+    -- Orchestrator resets monthly spend counter
+    choice ResetMonthlySpend : ContractId AgentSession
+      with resetDate : Date
+      controller orchestrator
+      do
+        create this with
+          tracker = tracker with
+            monthlySpent   = 0.0
+            lastResetMonth = resetDate
+
+    -- Delegator updates spending limits
+    choice UpdateLimits : ContractId AgentSession
+      with newLimits : SpendingLimits
+      controller delegator
+      do create this with limits = newLimits

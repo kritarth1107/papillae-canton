@@ -1,0 +1,35 @@
+-- | ComplianceAnchor.daml
+-- Immutable on-chain record of compliance check results.
+-- Created after each compliance check. Never modified.
+
+module Papillae.ComplianceAnchor where
+
+import Papillae.Types
+
+template ComplianceAnchor
+  with
+    orchestrator    : Party
+    sender          : Party
+    anchorId        : Text
+    paymentId       : Text
+    walletAddress   : Text
+    checkType       : Text       -- "FULL" | "SANCTIONS_ONLY"
+    policyVersion   : Text       -- "v2.1.0"
+    amlResult       : Text       -- "PASS" | "FAIL" | "NOT_RUN"
+    sanctionsResult : Text       -- "CLEAR" | "MATCH"
+    kycResult       : Text       -- "VERIFIED" | "NOT_RUN"
+    riskScore       : Decimal    -- 0.0 - 1.0
+    riskCategory    : Text       -- "LOW" | "MEDIUM" | "HIGH"
+    travelRuleRequired : Bool
+    finalDecision   : ComplianceResult
+    denyReason      : Optional Text
+    proofHash       : Text       -- SHA256 of full proof bundle
+    proofStorageRef : Text       -- S3/IPFS reference
+    checkedAt       : Time
+
+  where
+    signatory orchestrator
+    observer sender
+
+    ensure anchorId /= "" && paymentId /= "" && proofHash /= ""
+    -- Immutable: no choices. Write once, never modify.

@@ -1,0 +1,89 @@
+-- | BatchPayment.daml
+-- Groups multiple payment intents into a batch for enterprise payroll.
+-- The batch tracks overall progress and individual payment statuses.
+
+module Papillae.BatchPayment where
+
+import Papillae.Types
+
+data BatchItem = BatchItem
+  with
+    paymentId    : Text
+    recipientRef : Text
+    amountUSD    : Decimal
+    corridor     : Text
+    status       : Text       -- "pending" | "processing" | "settled" | "failed"
+    failReason   : Optional Text
+  deriving (Eq, Show)
+
+template BatchPayment
+  with
+    orchestrator  : Party
+    initiator     : Party
+    batchId       : Text
+    batchName     : Text       -- "March 2026 Payroll"
+    items         : [BatchItem]
+    totalAmountUSD: Decimal
+    totalItems    : Int
+    settledCount  : Int
+    failedCount   : Int
+    status        : Text       -- "created" | "processing" | "completed" | "partial_failure"
+    agentSessionId: Optional Text
+    createdAt     : Time
+    completedAt   : Optional Time
+
+  where
+    signatory initiator
+    observer orchestrator
+
+    ensure batchId /= "" && totalItems > 0
+
+    -- Start processing the batch
+    choice StartBatch : ContractId BatchPayment
+      with startedAt : Time
+      controller orchestrator
+      do
+        assertMsg "Batch must be in created state" (status == "created")
+        create this with status = "processing"
+
+    -- Update status of an individual item
+    choice UpdateItemStatus : ContractId BatchPayment
+      with
+        paymentId  : Text
+        newStatus  : Text
+        failReason : Optional Text
+        updatedAt  : Time
+      controller orchestrator
+      do
+        let updatedItems = map (\item ->
+              if item.paymentId == paymentId
+                then item with status = newStatus, failReason = failReason
+                else item
+              ) items
+        let newSettled = length (filter (\i -> i.status == "settled") updatedItems)
+        let newFailed = length (filter (\i -> i.status == "failed") updatedItems)
+        let allDone = newSettled + newFailed == totalItems
+        let batchStatus = if allDone
+              then if newFailed > 0 then "partial_failure" else "completed"
+              else "processing"
+        create this with
+          items        = updatedItems
+          settledCount = newSettled
+          failedCount  = newFailed
+          status       = batchStatus
+          completedAt  = if allDone then Some updatedAt else None
+
+    -- Cancel remaining pending items
+    choice CancelBatch : ContractId BatchPayment
+      with cancelledAt : Time
+      controller initiator
+      do
+        let updatedItems = map (\item ->
+              if item.status == "pending"
+                then item with status = "failed", failReason = Some "BATCH_CANCELLED"
+                else item
+              ) items
+        create this with
+          items  = updatedItems
+          status = "partial_failure"
+          completedAt = Some cancelledAt

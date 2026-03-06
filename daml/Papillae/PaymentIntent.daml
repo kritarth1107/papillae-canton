@@ -1,0 +1,135 @@
+-- | PaymentIntent.daml
+-- Core payment lifecycle contract. Tracks a payment from submission through
+-- compliance, routing, execution, to settlement or failure.
+
+module Papillae.PaymentIntent where
+
+import Papillae.Types
+
+template PaymentIntent
+  with
+    orchestrator    : Party
+    sender          : Party
+    paymentId       : Text
+    intentText      : Text       -- Natural language: "Send $200 to Mom in Manila"
+    amountUSD       : Decimal
+    destCurrency    : FiatCurrency
+    recipientRef    : Text       -- recipient ID from fixtures
+    corridor        : Text       -- "USD-PHP", "USD-NGN", etc.
+    priority        : RoutingPriority
+    status          : PaymentStatus
+    complianceProof : Optional Text  -- hash of compliance proof bundle
+    selectedRouteId : Optional Text
+    selectedRoute   : Optional [RouteHop]
+    txHashes        : [Text]     -- on-chain transaction hashes per hop
+    hopsCompleted   : Int
+    totalHops       : Int
+    feesPaidBps     : Int
+    fxRateUsed      : Optional Decimal
+    estimatedOutput : Optional Decimal
+    actualOutput    : Optional Decimal
+    failureReason   : Optional Text
+    idempotencyKey  : Text       -- prevents duplicate payments
+    agentSessionId  : Optional Text  -- if initiated by an agent
+    createdAt       : Time
+    updatedAt       : Time
+
+  where
+    signatory orchestrator
+    observer sender
+
+    ensure paymentId /= "" && amountUSD > 0.0 && idempotencyKey /= ""
+
+    -- Orchestrator records compliance check result
+    choice RecordComplianceResult : ContractId PaymentIntent
+      with
+        passed    : Bool
+        proofHash : Text
+        checkedAt : Time
+      controller orchestrator
+      do
+        let newStatus = if passed then ComplianceCheckPassed else ComplianceCheckFailed
+        create this with
+          status          = newStatus
+          complianceProof = Some proofHash
+          updatedAt       = checkedAt
+
+    -- Orchestrator assigns selected route
+    choice AssignRoute : ContractId PaymentIntent
+      with
+        routeId   : Text
+        route     : [RouteHop]
+        numHops   : Int
+        assignedAt: Time
+      controller orchestrator
+      do
+        assertMsg "Must pass compliance first" (status == ComplianceCheckPassed)
+        create this with
+          status          = RouteSelected
+          selectedRouteId = Some routeId
+          selectedRoute   = Some route
+          totalHops       = numHops
+          updatedAt       = assignedAt
+
+    -- Mark payment as executing
+    choice StartExecution : ContractId PaymentIntent
+      with startedAt : Time
+      controller orchestrator
+      do
+        assertMsg "Must have route assigned" (status == RouteSelected)
+        create this with
+          status    = Executing
+          updatedAt = startedAt
+
+    -- Record completion of a hop
+    choice RecordHopComplete : ContractId PaymentIntent
+      with
+        txHash      : Text
+        hopIndex    : Int
+        completedAt : Time
+      controller orchestrator
+      do
+        assertMsg "Must be executing" (status == Executing || status == HopCompleted)
+        create this with
+          status        = HopCompleted
+          txHashes      = txHashes ++ [txHash]
+          hopsCompleted = hopIndex + 1
+          updatedAt     = completedAt
+
+    -- Mark payment as settled (all hops complete, fiat delivered)
+    choice SettlePayment : ContractId PaymentIntent
+      with
+        fxRate    : Decimal
+        output    : Decimal
+        feeBps    : Int
+        settledAt : Time
+      controller orchestrator
+      do
+        create this with
+          status        = Settled
+          fxRateUsed    = Some fxRate
+          actualOutput  = Some output
+          feesPaidBps   = feeBps
+          updatedAt     = settledAt
+
+    -- Mark payment as failed
+    choice FailPayment : ContractId PaymentIntent
+      with
+        reason   : Text
+        failedAt : Time
+      controller orchestrator
+      do
+        create this with
+          status        = Failed
+          failureReason = Some reason
+          updatedAt     = failedAt
+
+    -- Sender requests refund after failure
+    choice RequestRefund : ContractId PaymentIntent
+      with refundedAt : Time
+      controller sender
+      do
+        assertMsg "Can only refund failed payments" (status == Failed)
+        create this with
+          status    = Refunded
+          updatedAt = refundedAt

@@ -1,0 +1,64 @@
+-- | EmergencyWithdraw.daml
+-- Emergency withdrawal mechanism. Allows the sender to reclaim funds
+-- stuck in the pipeline due to bridge/offramp failures.
+
+module Papillae.EmergencyWithdraw where
+
+template EmergencyWithdraw
+  with
+    orchestrator    : Party
+    sender          : Party
+    withdrawId      : Text
+    paymentId       : Text
+    amountUSD       : Decimal
+    stuckAtHop      : Int
+    stuckProtocol   : Text
+    reason          : Text
+    txHashesPartial : [Text]    -- tx hashes of completed hops before failure
+    status          : Text      -- "requested" | "approved" | "executed" | "denied"
+    approvedBy      : Optional Party
+    withdrawTxHash  : Optional Text
+    requestedAt     : Time
+    resolvedAt      : Optional Time
+
+  where
+    signatory sender
+    observer orchestrator
+
+    ensure withdrawId /= "" && paymentId /= "" && amountUSD > 0.0
+
+    -- Orchestrator approves the emergency withdrawal
+    choice ApproveWithdraw : ContractId EmergencyWithdraw
+      with approvedAt : Time
+      controller orchestrator
+      do
+        assertMsg "Must be in requested state" (status == "requested")
+        create this with
+          status     = "approved"
+          approvedBy = Some orchestrator
+          resolvedAt = Some approvedAt
+
+    -- Orchestrator executes the withdrawal (records tx hash)
+    choice ExecuteWithdraw : ContractId EmergencyWithdraw
+      with
+        txHash     : Text
+        executedAt : Time
+      controller orchestrator
+      do
+        assertMsg "Must be approved" (status == "approved")
+        create this with
+          status         = "executed"
+          withdrawTxHash = Some txHash
+          resolvedAt     = Some executedAt
+
+    -- Orchestrator denies the withdrawal (insufficient evidence)
+    choice DenyWithdraw : ContractId EmergencyWithdraw
+      with
+        denyReason : Text
+        deniedAt   : Time
+      controller orchestrator
+      do
+        assertMsg "Must be in requested state" (status == "requested")
+        create this with
+          status     = "denied"
+          resolvedAt = Some deniedAt

@@ -1,0 +1,70 @@
+-- | RouteRegistry.daml
+-- Maintains a registry of available routes and their health status.
+-- Orchestrator updates route metrics; anyone can query.
+
+module Papillae.RouteRegistry where
+
+import Papillae.Types
+
+template RouteRegistry
+  with
+    orchestrator : Party
+    registryId   : Text
+    corridor     : Text        -- "USD-PHP"
+    routes       : [RouteEntry]
+    updatedAt    : Time
+
+  where
+    signatory orchestrator
+
+    ensure registryId /= "" && corridor /= ""
+
+    -- Update route metrics (success rates, latency, etc.)
+    choice UpdateRouteMetrics : ContractId RouteRegistry
+      with
+        updatedRoutes : [RouteEntry]
+        updateTime    : Time
+      controller orchestrator
+      do create this with routes = updatedRoutes, updatedAt = updateTime
+
+    -- Trip circuit breaker for a specific route
+    choice TripCircuitBreaker : ContractId RouteRegistry
+      with
+        routeId    : Text
+        tripTime   : Time
+      controller orchestrator
+      do
+        let updated = map (\r ->
+              if r.routeId == routeId
+                then r with isCircuitBroken = True
+                else r
+              ) routes
+        create this with routes = updated, updatedAt = tripTime
+
+    -- Reset circuit breaker
+    choice ResetCircuitBreaker : ContractId RouteRegistry
+      with
+        routeId   : Text
+        resetTime : Time
+      controller orchestrator
+      do
+        let updated = map (\r ->
+              if r.routeId == routeId
+                then r with isCircuitBroken = False
+                else r
+              ) routes
+        create this with routes = updated, updatedAt = resetTime
+
+data RouteEntry = RouteEntry
+  with
+    routeId          : Text
+    description      : Text
+    hops             : [RouteHop]
+    totalCostBps     : Int
+    totalLatencyMs   : Int
+    successRate      : Decimal
+    score            : Decimal
+    offRampPartner   : Text
+    payoutMethod     : Text
+    isCircuitBroken  : Bool
+  deriving (Eq, Show)

@@ -1,0 +1,49 @@
+-- | PartnerRegistry.daml
+-- Registry of off-ramp and bridge partners with health metrics.
+
+module Papillae.PartnerRegistry where
+
+import Papillae.Types
+
+template PartnerRegistry
+  with
+    orchestrator : Party
+    registryId   : Text
+    partners     : [PartnerInfo]
+    updatedAt    : Time
+
+  where
+    signatory orchestrator
+
+    ensure registryId /= ""
+
+    choice AddPartner : ContractId PartnerRegistry
+      with
+        partner  : PartnerInfo
+        addedAt  : Time
+      controller orchestrator
+      do create this with partners = partner :: partners, updatedAt = addedAt
+
+    choice UpdatePartnerStatus : ContractId PartnerRegistry
+      with
+        partnerId  : Text
+        newActive  : Bool
+        updateTime : Time
+      controller orchestrator
+      do
+        let updated = map (\p ->
+              if p.partnerId == partnerId
+                then p with isActive = newActive
+                else p
+              ) partners
+        create this with partners = updated, updatedAt = updateTime
+
+    choice RemovePartner : ContractId PartnerRegistry
+      with
+        partnerId  : Text
+        removedAt  : Time
+      controller orchestrator
+      do
+        create this with
+          partners  = filter (\p -> p.partnerId /= partnerId) partners
+          updatedAt = removedAt

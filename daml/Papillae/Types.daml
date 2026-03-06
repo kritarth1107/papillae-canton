@@ -1,0 +1,106 @@
+-- | Types.daml
+-- Shared type definitions used across all Papillae DAML contracts.
+-- Canton Network trust layer for cross-border payment orchestration.
+
+module Papillae.Types where
+
+-- | Supported fiat currencies for off-ramp
+data FiatCurrency
+  = PHP  -- Philippine Peso
+  | NGN  -- Nigerian Naira
+  | MXN  -- Mexican Peso
+  | KES  -- Kenyan Shilling
+  | GHS  -- Ghanaian Cedi
+  deriving (Eq, Show)
+
+-- | Supported blockchain networks
+data Chain
+  = Ethereum
+  | Polygon
+  | Solana
+  | Base
+  | Arbitrum
+  deriving (Eq, Show)
+
+-- | Payment priority preferences
+data RoutingPriority
+  = Cost
+  | Speed
+  | Balanced
+  deriving (Eq, Show)
+
+-- | Status of a payment intent lifecycle
+data PaymentStatus
+  = Submitted
+  | ComplianceCheckPending
+  | ComplianceCheckPassed
+  | ComplianceCheckFailed
+  | RouteSelected
+  | Executing
+  | HopCompleted
+  | Settled
+  | Failed
+  | Refunded
+  deriving (Eq, Show)
+
+-- | Compliance check result
+data ComplianceResult
+  = CompliancePass
+  | ComplianceFail
+  | ComplianceManualReview
+  deriving (Eq, Show)
+
+-- | Route hop information
+data RouteHop = RouteHop
+  with
+    hopType     : Text      -- "bridge" | "swap" | "offramp"
+    protocol    : Text      -- "circle_cctp" | "wormhole" | etc.
+    fromChain   : Text
+    toChain     : Text
+    fromToken   : Text
+    toToken     : Text
+    costBps     : Int
+    latencyMs   : Int
+    successRate : Decimal
+  deriving (Eq, Show)
+
+-- | Agent spending limits
+data SpendingLimits = SpendingLimits
+  with
+    maxSingleTransfer    : Decimal
+    maxDailyVolume       : Decimal
+    maxMonthlyVolume     : Decimal
+    maxTotalVolume       : Decimal
+    allowedCorridors     : [Text]
+    allowedCurrencies    : [Text]
+    requiresApprovalAbove: Optional Decimal
+  deriving (Eq, Show)
+
+-- | Agent spend tracking totals
+data SpendTracker = SpendTracker
+  with
+    dailySpent   : Decimal
+    monthlySpent : Decimal
+    totalSpent   : Decimal
+    lastResetDay : Date
+    lastResetMonth : Date
+  deriving (Eq, Show)
+
+-- | Off-ramp partner info
+data PartnerInfo = PartnerInfo
+  with
+    partnerId     : Text
+    partnerName   : Text
+    partnerType   : Text     -- "offramp" | "bridge"
+    supportedChains : [Text]
+    feeBps        : Int
+    isActive      : Bool
+  deriving (Eq, Show)
+
+-- | Dispute resolution status
+data DisputeStatus
+  = DisputeOpen
+  | DisputeUnderReview
+  | DisputeResolved
+  | DisputeRejected
+  deriving (Eq, Show)

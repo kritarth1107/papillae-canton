@@ -1,0 +1,79 @@
+-- | RecurringPayment.daml
+-- Manages scheduled recurring payment instructions.
+-- The orchestrator triggers execution based on the schedule.
+
+module Papillae.RecurringPayment where
+
+import Papillae.Types
+
+template RecurringPayment
+  with
+    orchestrator    : Party
+    sender          : Party
+    scheduleId      : Text
+    recipientRef    : Text
+    amountUSD       : Decimal
+    corridor        : Text
+    priority        : RoutingPriority
+    frequency       : Text         -- "weekly" | "biweekly" | "monthly"
+    dayOfWeek       : Optional Text -- "monday", "friday", etc.
+    dayOfMonth      : Optional Int
+    nextExecutionAt : Time
+    lastExecutedAt  : Optional Time
+    executionCount  : Int
+    maxExecutions   : Optional Int  -- None = unlimited
+    totalSent       : Decimal
+    isActive        : Bool
+    agentSessionId  : Optional Text
+    createdAt       : Time
+
+  where
+    signatory sender
+    observer orchestrator
+
+    ensure scheduleId /= "" && amountUSD > 0.0
+
+    -- Orchestrator triggers next scheduled execution
+    choice TriggerExecution : ContractId RecurringPayment
+      with
+        executedAt      : Time
+        nextExecTime    : Time
+        paymentId       : Text
+      controller orchestrator
+      do
+        assertMsg "Schedule is not active" isActive
+        assertMsg "Not yet time for execution" (executedAt >= nextExecutionAt)
+        let newCount = executionCount + 1
+        let shouldDeactivate = case maxExecutions of
+              Some max -> newCount >= max
+              None -> False
+        create this with
+          lastExecutedAt  = Some executedAt
+          nextExecutionAt = nextExecTime
+          executionCount  = newCount
+          totalSent       = totalSent + amountUSD
+          isActive        = not shouldDeactivate
+
+    -- Sender pauses the schedule
+    choice PauseSchedule : ContractId RecurringPayment
+      controller sender
+      do create this with isActive = False
+
+    -- Sender resumes the schedule
+    choice ResumeSchedule : ContractId RecurringPayment
+      with newNextExec : Time
+      controller sender
+      do create this with isActive = True, nextExecutionAt = newNextExec
+
+    -- Sender updates the amount
+    choice UpdateAmount : ContractId RecurringPayment
+      with newAmount : Decimal
+      controller sender
+      do
+        assertMsg "Amount must be positive" (newAmount > 0.0)
+        create this with amountUSD = newAmount
+
+    -- Sender cancels entirely
+    choice CancelSchedule : ContractId RecurringPayment
+      controller sender
+      do create this with isActive = False

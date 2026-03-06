@@ -1,0 +1,40 @@
+-- | AgentExecutionLog.daml
+-- Immutable log of every AI agent action. Created by the orchestrator
+-- after every agent-initiated operation.
+
+module Papillae.AgentExecutionLog where
+
+data AgentAction
+  = InitiatedPayment
+  | PaymentApprovalRequested
+  | PaymentApprovalGranted
+  | PaymentApprovalRejected
+  | SessionQueried
+  | LimitCheckFailed
+  | SessionExpired
+  deriving (Eq, Show)
+
+template AgentExecutionLog
+  with
+    orchestrator  : Party
+    sessionId     : Text
+    agentParty    : Party
+    delegatorParty: Party
+    logId         : Text
+    action        : AgentAction
+    paymentId     : Optional Text
+    amount        : Optional Decimal
+    corridor      : Optional Text
+    outcome       : Text
+    denyReason    : Optional Text
+    spendAfter    : Optional Decimal
+    executedAt    : Time
+    llmProvider   : Optional Text
+    intentText    : Optional Text
+
+  where
+    signatory orchestrator
+    observer agentParty, delegatorParty
+
+    ensure logId /= "" && sessionId /= ""
+    -- No choices — write once, never modify
