@@ -1,0 +1,45 @@
+-- | Compliance.daml
+-- Manages KYC/AML attestations for cross-border transfers.
+
+module Papillae.Compliance.Attestation where
+
+import Papillae.Common
+import DA.Time
+
+-- | A verified statement about a user or transaction
+data AttestationDetails = AttestationDetails
+  with
+    amlPassed    : Bool
+    sanctionsOk  : Bool
+    userRiskLevel: Int      -- 1 (Low) to 5 (High)
+    expiry       : Time
+    referenceId  : Text     -- External ID from off-chain compliance engine
+  deriving (Eq, Show)
+
+-- | Issued by an authorized Compliance Provider
+template ComplianceAttestation
+  with
+    provider     : Party    -- The entity performing the check (e.g., Chainalysis, TRM)
+    subject      : Party    -- The sender or the specific transaction
+    orchestrator : Party
+    details      : AttestationDetails
+    issuedAt     : Time
+  where
+    signatory provider
+    observer subject, orchestrator
+
+    ensure issuedAt < details.expiry
+
+-- | Capability contract for an authorized compliance provider
+template ComplianceProviderRole
+  with
+    governance : Party
+    provider   : Party
+    isActive   : Bool
+  where
+    signatory governance
+    observer provider
+
+    choice DeactivateProvider : ContractId ComplianceProviderRole
+      controller governance
+      do create this with isActive = False

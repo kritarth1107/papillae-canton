@@ -1,0 +1,113 @@
+-- | MainTest.daml
+-- End-to-end verification script for Papillae production contracts.
+
+module Papillae.Test.MainTest where
+
+import Daml.Script
+import Papillae.Common
+import Papillae.Core.RoleManager
+import Papillae.Compliance.Attestation
+import Papillae.Payment.PaymentIntent
+import Papillae.Payment.AgentSession
+import Papillae.Routing.RouteRegistry
+import DA.Set qualified as Set
+import DA.Time
+import DA.Date
+
+setup : Script ()
+setup = script do
+  -- 1. Setup Parties
+  governance <- allocateParty "Governance"
+  orchestrator <- allocateParty "PapillaeOrchestrator"
+  partner <- allocateParty "CoinsPH"
+  sender <- allocateParty "Alice"
+  agent <- allocateParty "AliceAgent"
+  complianceProvider <- allocateParty "Chainalysis"
+
+  let now = datetime 2024 Jan 1 12 0 0
+  let expiry = datetime 2024 Jan 2 12 0 0
+
+  -- 2. Setup Role Manager
+  roleManagerCid <- submit governance do
+    createCmd RoleManager with
+      governance = governance
+      orchestrator = orchestrator
+      offRampPartners = Set.empty
+
+  -- 3. Setup Compliance Provider
+  submit governance do
+    createCmd ComplianceProviderRole with
+      governance = governance
+      provider = complianceProvider
+      isActive = True
+
+  -- 4. Issue Attestation for Alice
+  attestationCid <- submit complianceProvider do
+    createCmd ComplianceAttestation with
+      provider = complianceProvider
+      subject = sender
+      orchestrator = orchestrator
+      details = AttestationDetails with
+        amlPassed = True
+        sanctionsOk = True
+        userRiskLevel = 1
+        expiry = expiry
+        referenceId = "COMP-001"
+      issuedAt = now
+
+  -- 5. Alice sets up an Agent Session
+  (sessionCid, _) <- submit sender do
+    let limits = SessionLimits with
+          maxPerTransfer = 1000.0
+          maxDailyVolume = 5000.0
+          allowedCorridors = ["USDC-PHP"]
+    let tracker = UsageTracker with
+          dailyVolumeSpent = 0.0
+          lastResetTime = now
+    
+    createAndExerciseCmd AgentSession with
+      delegator = sender
+      agent = agent
+      orchestrator = orchestrator
+      sessionId = "SESS-001"
+      description = "Alice's Travel Agent"
+      limits = limits
+      tracker = tracker
+      expiresAt = expiry
+      isActive = True
+     RequestPayment with
+        paymentId = "PAY-001"
+        amount = 500.0
+        stableCoin = USDC
+        targetFiat = PHP
+        recipient = "RECP-001"
+        priority = Speed
+        now = now
+
+  -- 6. Orchestrator attaches compliance & routes
+  let routeInfo = RouteInfo with
+        partner = partner
+        corridorId = "USDC-PHP"
+        bridgeProtocol = "CircleCCTP"
+        estimatedFeeBps = 10
+        estimatedSlippage = 0.001
+
+  -- Fetch the intent created by RequestPayment
+  [(intentCid, intent)] <- query @PaymentIntent orchestrator
+  
+  intentCid <- submit orchestrator do
+    exerciseCmd intentCid AttachCompliance with cid = attestationCid
+
+  intentCid <- submit orchestrator do
+    exerciseCmd intentCid LockRoute with 
+      routeInfo = routeInfo
+      now = now
+
+  -- 7. Partner confirms and settles
+  intentCid <- submit partner do
+    exerciseCmd intentCid StartSettlement with now = now
+
+  submit partner do
+    exerciseCmd intentCid FinalizeSettlement with now = now
+
+  pure ()

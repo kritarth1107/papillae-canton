@@ -1,0 +1,9 @@
+sdk-version: 2.9.0
+name: papillae-canton
+version: 0.1.0
+source: daml
+dependencies:
+  - daml-prim
+  - daml-stdlib
+build-options:
+  - --enable-interfaces

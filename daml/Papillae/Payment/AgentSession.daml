@@ -1,0 +1,99 @@
+-- | AgentSession.daml
+-- Secure delegation model for AI agents.
+
+module Papillae.Payment.AgentSession where
+
+import Papillae.Common
+import Papillae.Payment.PaymentIntent
+import DA.Time
+
+-- | Spending limits for a session
+data SessionLimits = SessionLimits
+  with
+    maxPerTransfer  : Decimal
+    maxDailyVolume  : Decimal
+    allowedCorridors: [CorridorId]
+  deriving (Eq, Show)
+
+-- | Tracks usage against limits
+data UsageTracker = UsageTracker
+  with
+    dailyVolumeSpent : Decimal
+    lastResetTime    : Time
+  deriving (Eq, Show)
+
+template AgentSession
+  with
+    delegator    : Party    -- The human user
+    agent        : Party    -- The AI agent node
+    orchestrator : Party
+    sessionId    : Text
+    limits       : SessionLimits
+    tracker      : UsageTracker
+    expiresAt    : Time
+    isActive     : Bool
+  where
+    signatory delegator
+    observer agent, orchestrator
+
+    -- | Agent initiates a payment within limits
+    nonconsuming choice RequestPayment : (ContractId AgentSession, ContractId PaymentIntent)
+      with
+        paymentId   : Text
+        amount      : Decimal
+        stableCoin  : StableCoin
+        targetFiat  : FiatCurrency
+        recipient   : Text
+        priority    : Priority
+        now         : Time
+      controller agent
+      do
+        assertMsg "Session inactive" isActive
+        assertMsg "Session expired" (now < expiresAt)
+        
+        -- Check per-transfer limit
+        assertMsg "Transfer exceeds limit" (amount <= limits.maxPerTransfer)
+        
+        -- Check and reset daily tracker if needed
+        let dayInMicros = 86400000000
+        let (currentDailySpent, newResetTime) = 
+              if convertRelTimeToMicroseconds (subTime now tracker.lastResetTime) >= dayInMicros
+              then (0.0, now)
+              else (tracker.dailyVolumeSpent, tracker.lastResetTime)
+        
+        assertMsg "Daily volume exceeded" (currentDailySpent + amount <= limits.maxDailyVolume)
+        
+        -- Check corridor allowlist
+        let targetCorridor = getCorridorId stableCoin targetFiat
+        unless (null limits.allowedCorridors) $
+          assertMsg "Corridor not allowed" (targetCorridor `elem` limits.allowedCorridors)
+
+        -- Update tracker
+        newSessionCid <- create this with 
+          tracker = UsageTracker with 
+            dailyVolumeSpent = currentDailySpent + amount
+            lastResetTime = newResetTime
+
+        -- Create intent
+        intentCid <- create PaymentIntent with
+          sender = delegator -- The delegator is the legal sender
+          orchestrator = orchestrator
+          paymentId = paymentId
+          amount = amount
+          stableCoin = stableCoin
+          targetCurrency = targetFiat
+          recipientRef = recipient
+          priority = priority
+          status = Created
+          route = None
+          attestationCid = None
+          errors = []
+          createdAt = now
+          lastUpdatedAt = now
+
+        return (newSessionCid, intentCid)
+
+    -- | Delegator can kill session immediately
+    choice RevokeSession : ()
+      controller delegator
+      do return ()

@@ -1,0 +1,58 @@
+-- | RoleManager.daml
+-- Manages ecosystem participants and their authorized roles.
+
+module Papillae.Core.RoleManager where
+
+import DA.Set qualified as Set
+
+-- | Central authority and participant registry
+template RoleManager
+  with
+    governance     : Party
+    orchestrator   : Party
+    offRampPartners : Set.Set Party
+  where
+    signatory governance
+    observer orchestrator, Set.toList offRampPartners
+
+    -- | Authorize a new off-ramp partner
+    choice AddPartner : ContractId RoleManager
+      with partner : Party
+      controller governance
+      do
+        create this with offRampPartners = Set.insert partner offRampPartners
+
+    -- | Revoke an off-ramp partner's authorization
+    choice RemovePartner : ContractId RoleManager
+      with partner : Party
+      controller governance
+      do
+        create this with offRampPartners = Set.delete partner offRampPartners
+
+    -- | Transition governance to a new party (or DAO contract)
+    choice TransferGovernance : ContractId RoleManager
+      with newGovernance : Party
+      controller governance
+      do
+        create this with governance = newGovernance
+
+-- | Capability contract issued to authorized partners
+template OffRampPartnerRole
+  with
+    governance    : Party
+    partner       : Party
+    managerId     : ContractId RoleManager
+    corridors     : [Text]
+    isActive      : Bool
+  where
+    signatory governance
+    observer partner
+
+    choice DeactivatePartner : ContractId OffRampPartnerRole
+      controller governance
+      do create this with isActive = False
+
+    choice UpdatePartnerCorridors : ContractId OffRampPartnerRole
+      with newCorridors : [Text]
+      controller governance
+      do create this with corridors = newCorridors

@@ -1,0 +1,46 @@
+-- | Common.daml
+-- Shared types and data structures for the Papillae ecosystem.
+
+module Papillae.Common where
+
+import DA.Time
+
+-- | Supported stablecoins for cross-border routing
+data StableCoin
+  = USDC
+  | USDT
+  | PYUSD
+  | EURC
+  deriving (Eq, Show)
+
+-- | Supported fiat destination currencies
+data FiatCurrency
+  = PHP  -- Philippine Peso
+  | NGN  -- Nigerian Naira
+  | MXN  -- Mexican Peso
+  | KES  -- Kenyan Shilling
+  | GHS  -- Ghanaian Cedi
+  | BRL  -- Brazilian Real
+  deriving (Eq, Show)
+
+-- | Payment priority set by the sender
+data Priority
+  = Cost    -- optimize for lowest fee
+  | Speed   -- optimize for fastest settlement
+  | Balanced -- hybrid optimization
+  deriving (Eq, Show)
+
+-- | Standardized error packet for failed transfers
+data ErrorDetail = ErrorDetail
+  with
+    code      : Text
+    message   : Text
+    timestamp : Time
+  deriving (Eq, Show)
+
+-- | Corridor identifier (e.g., "USDC-PHP")
+type CorridorId = Text
+
+-- | Helper to construct corridor ID
+getCorridorId : StableCoin -> FiatCurrency -> CorridorId
+getCorridorId coin fiat = show coin <> "-" <> show fiat

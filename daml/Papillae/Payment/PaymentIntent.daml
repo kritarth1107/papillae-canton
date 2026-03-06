@@ -1,0 +1,114 @@
+-- | PaymentIntent.daml
+-- Core production-grade contract for cross-border payment orchestration.
+
+module Papillae.Payment.PaymentIntent where
+
+import Papillae.Common
+import Papillae.Compliance.Attestation
+import DA.Time
+import DA.Optional
+
+-- | Lifecycle states of a payment
+data IntentStatus
+  = Created           -- Initial state
+  | Compliant        -- Compliance attestation attached
+  | Routed           -- Route locked
+  | Executing        -- Funds in transit (bridging)
+  | AwaitingSettlement -- On-ramp partner notified
+  | Settled          -- Fiat delivered
+  | Refunded         -- Failed and funds returned
+  | Cancelled        -- Terminated before execution
+  deriving (Eq, Show)
+
+-- | Route configuration for a specific intent
+data RouteInfo = RouteInfo
+  with
+    partner           : Party
+    corridorId        : CorridorId
+    bridgeProtocol    : Text
+    estimatedFeeBps   : Int
+    estimatedSlippage : Decimal
+  deriving (Eq, Show)
+
+template PaymentIntent
+  with
+    sender          : Party
+    orchestrator    : Party
+    paymentId       : Text
+    amount          : Decimal
+    stableCoin      : StableCoin
+    targetCurrency  : FiatCurrency
+    recipientRef    : Text
+    priority        : Priority
+    status          : IntentStatus
+    
+    -- Optional metadata populated throughout lifecycle
+    route           : Optional RouteInfo
+    attestationCid  : Optional (ContractId ComplianceAttestation)
+    errors          : [ErrorDetail]
+    
+    createdAt       : Time
+    lastUpdatedAt   : Time
+
+  where
+    signatory sender, orchestrator
+    
+    ensure amount > 0.0 && paymentId /= ""
+
+    -- | Attach a compliance attestation (must be valid)
+    choice AttachCompliance : ContractId PaymentIntent
+      with 
+        cid : ContractId ComplianceAttestation
+      controller orchestrator
+      do
+        attestation <- fetch cid
+        assertMsg "Attestation subject must match sender" (attestation.subject == sender)
+        assertMsg "Compliance check must be passed" (attestation.details.amlPassed && attestation.details.sanctionsOk)
+        create this with 
+          status = Compliant
+          attestationCid = Some cid
+          lastUpdatedAt = attestation.issuedAt
+
+    -- | Lock in the routing details
+    choice LockRoute : ContractId PaymentIntent
+      with 
+        routeInfo : RouteInfo
+        now       : Time
+      controller orchestrator
+      do
+        assertMsg "Must be compliant to route" (status == Compliant)
+        create this with 
+          status = Routed
+          route = Some routeInfo
+          lastUpdatedAt = now
+
+    -- | Partner confirms receipt and starts local fiat delivery
+    choice StartSettlement : ContractId PaymentIntent
+      with now : Time
+      controller (fromSome route).partner
+      do
+        assertMsg "Must be Routed or Executing" (status == Routed || status == Executing)
+        create this with 
+          status = AwaitingSettlement
+          lastUpdatedAt = now
+
+    -- | Partner confirms final fiat delivery
+    choice FinalizeSettlement : ContractId PaymentIntent
+      with now : Time
+      controller (fromSome route).partner
+      do
+        assertMsg "Must be awaiting settlement" (status == AwaitingSettlement)
+        create this with 
+          status = Settled
+          lastUpdatedAt = now
+
+    -- | Handle terminal failure
+    choice FailIntent : ContractId PaymentIntent
+      with 
+        error : ErrorDetail
+      controller orchestrator
+      do
+        create this with 
+          status = Refunded
+          errors = error :: errors
+          lastUpdatedAt = error.timestamp

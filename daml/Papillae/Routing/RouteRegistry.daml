@@ -1,0 +1,66 @@
+-- | RouteRegistry.daml
+-- Dynamic registry for corridor health and routing telemetry.
+
+module Papillae.Routing.RouteRegistry where
+
+import Papillae.Common
+import DA.Time
+
+-- | Detailed health metrics for a partner in a corridor
+data HealthMetrics = HealthMetrics
+  with
+    successRateBps     : Int      -- 0 to 10000 (basis points)
+    avgSettlementSec   : Int
+    currentLiquidity   : Decimal
+    lastUpdate         : Time
+  deriving (Eq, Show)
+
+-- | Configuration for a specific payment corridor
+template CorridorConfig
+  with
+    orchestrator : Party
+    corridorId   : CorridorId
+    minAmount    : Decimal
+    maxAmount    : Decimal
+    isActive     : Bool
+  where
+    signatory orchestrator
+    
+    choice ToggleCorridor : ContractId CorridorConfig
+      controller orchestrator
+      do create this with isActive = not isActive
+
+-- | Telemetry record for a completed or failed transfer
+template RouteTelemetry
+  with
+    orchestrator : Party
+    paymentId    : Text
+    corridorId   : CorridorId
+    partner      : Party
+    succeeded    : Bool
+    totalTimeSec : Int
+    feePaid      : Decimal
+    recordedAt   : Time
+  where
+    signatory orchestrator
+
+-- | Global registry for orchestrator to manage multiple partners
+template RoutingRegistry
+  with
+    orchestrator : Party
+    partners     : [(Party, HealthMetrics)]
+    updatedAt    : Time
+  where
+    signatory orchestrator
+
+    choice UpdatePartnerHealth : ContractId RoutingRegistry
+      with 
+        partner : Party
+        metrics : HealthMetrics
+        now     : Time
+      controller orchestrator
+      do
+        let updatedPartners = (partner, metrics) :: filter (\(p, _) -> p /= partner) partners
+        create this with 
+          partners = updatedPartners
+          updatedAt = now
